@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <!-- interactive-widget=resizes-content: клавиатура не накрывает поле ввода -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+  <title>Mydus Chat</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      background: #121212;
+      color: #fff;
+      font-family: Arial, sans-serif;
+      height: 100dvh;              /* живая высота окна, адресная строка ничего не перекроет */
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    header {
+      padding: 14px 20px;
+      padding-top: calc(14px + env(safe-area-inset-top));
+      background: #1e1e1e;
+      font-weight: bold;
+      font-size: 18px;
+      border-bottom: 1px solid rgba(128,128,128,0.3);
+      flex-shrink: 0;
+    }
+    /* Лента сообщений — листается сама */
+    .chat {
+      flex: 1;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .msg {
+      max-width: 80%;
+      padding: 10px 14px;
+      border-radius: 18px;
+      word-break: break-word;
+      line-height: 1.4;
+    }
+    .msg.me    { align-self: flex-end; background: #3498db; }
+    .msg.other { align-self: flex-start; background: #2c2c2c; }
+    .msg audio { width: 240px; max-width: 100%; height: 40px; margin-top: 4px; }
+
+    /* Панель ввода — всегда над системными кнопками телефона */
+    .input-bar {
+      flex-shrink: 0;
+      display: flex;
+      gap: 8px;
+      padding: 10px 12px;
+      padding-bottom: calc(10px + env(safe-area-inset-bottom));
+      background: #1e1e1e;
+      border-top: 1px solid rgba(128,128,128,0.3);
+    }
+    .input-bar input {
+      flex: 1;
+      min-width: 0;
+      background: #2c2c2c;
+      border: none;
+      color: #fff;
+      border-radius: 22px;
+      padding: 12px 16px;
+      font-size: 16px;
+      outline: none;
+    }
+    .input-bar button {
+      width: 46px;
+      height: 46px;
+      border: none;
+      border-radius: 50%;
+      font-size: 20px;
+      cursor: pointer;
+      flex-shrink: 0;
+      color: #fff;
+    }
+    #micBtn  { background: #2ecc71; }
+    #sendBtn { background: #3498db; }
+    #micBtn.recording {
+      background: #e74c3c;
+      animation: pulse 1s infinite;
+    }
+    @keyframes pulse {
+      50% { transform: scale(1.12); }
+    }
+    .rec-info {
+      align-self: center;
+      color: #e74c3c;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+  <header>💬 Mydus Chat</header>
+
+  <div class="chat" id="chat"></div>
+
+  <div class="input-bar">
+    <input id="textIn" type="text" placeholder="Сообщение..." autocomplete="off">
+    <div class="rec-info" id="recInfo" style="display:none">0:00</div>
+    <button id="micBtn" title="Голосовое">🎙️</button>
+    <button id="sendBtn" title="Отправить">➤</button>
+  </div>
+
+  <script>
+    const chatEl   = document.getElementById('chat');
+    const textIn   = document.getElementById('textIn');
+    const sendBtn  = document.getElementById('sendBtn');
+    const micBtn   = document.getElementById('micBtn');
+    const recInfo  = document.getElementById('recInfo');
+
+    const MAX_REC_SEC = 60; // ограничение голосового, чтобы не переполнить память браузера
+
+    // ----- Сообщения: хранятся в этом браузере -----
+    function load() {
+      try { return JSON.parse(localStorage.getItem('mydusChat') || '[]'); }
+      catch (e) { return []; }
+    }
+    function save(msgs) {
+      try { localStorage.setItem('mydusChat', JSON.stringify(msgs)); }
+      catch (e) { alert('Память переполнена, почистите старые сообщения'); }
+    }
+
+    function addMsg(data, isMine, scroll = true) {
+      const div = document.createElement('div');
+      div.className = 'msg ' + (isMine ? 'me' : 'other');
+      if (data.type === 'text') {
+        div.textContent = data.text;
+      } else {
+        div.textContent = '🎙️ Голосовое';
+        const audio = document.createElement('audio');
+        audio.controls = true;
+        audio.src = data.src;
+        div.appendChild(document.createElement('br'));
+        div.appendChild(audio);
+      }
+      chatEl.appendChild(div);
+      if (scroll) chatEl.scrollTop = chatEl.scrollHeight;
+    }
+
+    // Отрисовка истории при загрузке
+    const history = load();
+    history.forEach(m => addMsg(m, true, false));
+    chatEl.scrollTop = chatEl.scrollHeight;
+
+    function push(data) {
+      history.push(data);
+      save(history);
+      addMsg(data, true);
+    }
+
+    // ----- Текст -----
+    function sendText() {
+      const t = textIn.value.trim();
+      if (!t) return;
+      push({ type: 'text', text: t });
+      textIn.value = '';
+    }
+    sendBtn.addEventListener('click', sendText);
+    textIn.addEventListener('keydown', e => { if (e.key === 'Enter') sendText(); });
+
+    // ----- Голосовые -----
+    let mediaRecorder = null;
+    let chunks = [];
+    let recTimer = null;
+    let recSeconds = 0;
+
+    micBtn.addEventListener('click', async () => {
+      if (mediaRecorder && mediaRecorder.state === 'recording') { stopRec(); return; }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
+        chunks = [];
+        mediaRecorder.ondataavailable = e => chunks.push(e.data);
+        mediaRecorder.onstop = () => {
+          stream.getTracks().forEach(t => t.stop());
+          const blob = new Blob(chunks, { type: 'audio/webm' });
+          const reader = new FileReader();
+          reader.onload = () => push({ type: 'audio', src: reader.result });
+          reader.readAsDataURL(blob);
+        };
+        mediaRecorder.start();
+        micBtn.classList.add('recording');
+        recInfo.style.display = 'block';
+        recSeconds = 0;
+        recInfo.textContent = '0:00';
+        recTimer = setInterval(() => {
+          recSeconds++;
+          recInfo.textContent = Math.floor(recSeconds / 60) + ':' +
+            String(recSeconds % 60).padStart(2, '0');
+          if (recSeconds >= MAX_REC_SEC) stopRec();
+        }, 1000);
+      } catch (err) {
+        alert('Нет доступа к микрофону. Разреши его в настройках браузера для этого сайта.');
+      }
+    });
+
+    function stopRec() {
+      clearInterval(recTimer);
+      recInfo.style.display = 'none';
+      micBtn.classList.remove('recording');
+      if (mediaRecorder && mediaRecorder.state === ' recording') mediaRecorder.stop();
+      if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+    }
+  </script>
+</body>
+</html>
