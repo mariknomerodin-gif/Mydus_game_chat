@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MydusChat</title>
+<style>
+  body{margin:0;font-family:system-ui,sans-serif;background:#0f1420;color:#e7ecf5;height:100dvh;display:flex;flex-direction:column}
+  header{padding:14px;text-align:center;font-weight:700;background:#161d2e;border-bottom:1px solid #232c42}
+  #chat{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px}
+  .row{display:flex}
+  .row.me{justify-content:flex-end}
+  .msg{max-width:78%;background:#1d2740;border-radius:14px;padding:9px 12px}
+  .me .msg{background:#2a4a8f}
+  .nm{font-size:11px;opacity:.6;margin-bottom:3px}
+  .tm{font-size:10px;opacity:.5;text-align:right;margin-top:2px}
+  audio{width:190px;height:34px;margin-top:4px}
+  #bar{display:flex;gap:8px;padding:10px;background:#161d2e;border-top:1px solid #232c42}
+  #inp{flex:1;background:#0f1420;border:1px solid #2a3550;color:#e7ecf5;border-radius:22px;padding:11px 14px;font-size:16px;outline:none}
+  .btn{border:0;border-radius:50%;width:44px;height:44px;font-size:18px;background:#2a4a8f;color:#fff;flex:none}
+  #rec{position:fixed;left:0;right:0;bottom:76px;display:flex;justify-content:center;align-items:center;gap:10px}
+  #rec .pill{background:#a33;color:#fff;border-radius:20px;padding:8px 14px;font-size:14px}
+  #rec button{border:0;border-radius:20px;padding:8px 14px;font-size:14px;background:#e7ecf5;color:#0f1420}
+</style>
+</head>
+<body>
+<header>MydusChat</header>
+<div id="chat"></div>
+<div id="rec" hidden><div class="pill">🔴 Идёт запись <span id="time">0:00</span></div><button id="stopRec">Стоп</button></div>
+<div id="bar">
+  <button class="btn" id="mic">🎙️</button>
+  <input id="inp" placeholder="Сообщение...">
+  <button class="btn" id="send">➤</button>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script>
+const firebaseConfig = {
+  apiKey: "AIzaSyDNu4QlPuLrpNvC7pES3jgrOAkc2yT6M5M",
+  authDomain: "myduschat.firebaseapp.com",
+  databaseURL: "https://myduschat-default-rtdb.firebaseio.com",
+  projectId: "myduschat",
+  storageBucket: "myduschat.firebasestorage.app",
+  messagingSenderId: "434801103362",
+  appId: "1:434801103362:web:ff389930c964e57b514d1b",
+  measurementId: "G-XP93MYXX2K"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+const ref = db.ref('messages');
+
+if(!localStorage.mydusUid) localStorage.mydusUid = Math.random().toString(36).slice(2);
+const uid = localStorage.mydusUid;
+let name = localStorage.mydusName;
+while(!name){ name = prompt('Как тебя зовут?'); if(name) name = name.trim().slice(0,30); }
+localStorage.mydusName = name;
+
+const chat = document.getElementById('chat');
+const inp  = document.getElementById('inp');
+
+function fmt(s){ return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+
+function add(n, type, payload, ts, mine){
+  const row = document.createElement('div');
+  row.className = 'row' + (mine ? ' me' : '');
+  const box = document.createElement('div'); box.className = 'msg';
+  const nm = document.createElement('div'); nm.className = 'nm'; nm.textContent = n;
+  const tm = document.createElement('div'); tm.className = 'tm';
+  tm.textContent = new Date(ts).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
+  box.append(nm);
+  if(type === 'voice'){
+    const a = document.createElement('audio'); a.controls = true; a.src = payload;
+    box.append(a);
+  } else {
+    const p = document.createElement('div'); p.textContent = payload;
+    box.append(p);
+  }
+  box.append(tm);
+  row.append(box); chat.append(row);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+ref.limitToLast(200).on('child_added', s=>{
+  const v = s.val();
+  if(!v || !v.n) return;
+  add(v.n, v.t, v.t === 'voice' ? v.a : v.m, v.ts, v.u === uid);
+});
+
+function send(){
+  const t = inp.value.trim().slice(0, 2000);
+  if(!t) return;
+  inp.value = '';
+  ref.push({n:name, u:uid, t:'text', m:t, ts:Date.now()});
+}
+document.getElementById('send').onclick = send;
+inp.addEventListener('keydown', e=>{ if(e.key === 'Enter') send(); });
+
+let rec = null, chunks = [], timer = null, sec = 0;
+async function toggleRec(){
+  if(rec){ rec.stop(); return; }
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+    const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : '';
+    rec = new MediaRecorder(stream, mime ? {mimeType:mime, audioBitsPerSecond:16000} : {audioBitsPerSecond:16000});
+    chunks = []; sec = 0;
+    document.getElementById('rec').hidden = false;
+    timer = setInterval(()=>{
+      sec++;
+      document.getElementById('time').textContent = fmt(sec);
+      if(sec >= 60) rec.stop();
+    }, 1000);
+    rec.ondataavailable = e => chunks.push(e.data);
+    rec.onstop = () => {
+      clearInterval(timer);
+      document.getElementById('rec').hidden = true;
+      rec.stream.getTracks().forEach(t=>t.stop());
+      const blob = new Blob(chunks, {type: rec.mimeType || 'audio/webm'});
+      const r = new FileReader();
+      r.onload = () => ref.push({n:name, u:uid, t:'voice', a:r.result, ts:Date.now()});
+      r.readAsDataURL(blob);
+      rec = null;
+    };
+    rec.start();
+  }catch(e){
+    alert('Нужно разрешить доступ к микрофону');
+    rec = null;
+  }
+}
+document.getElementById('mic').onclick = toggleRec;
+document.getElementById('stopRec').onclick = () => rec && rec.stop();
+</script>
+</body>
+</html>
