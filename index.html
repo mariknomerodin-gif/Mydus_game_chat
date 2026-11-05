@@ -29,9 +29,12 @@
   .panel .pbody{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px}
   .field{background:#0f1420;border:1px solid #2a3550;color:#e7ecf5;border-radius:12px;padding:11px 14px;font-size:16px;outline:none}
   .primary{background:#2a4a8f;color:#fff;border:0;border-radius:12px;padding:12px;font-size:15px}
+  .danger{background:#5a2733;color:#fff;border:0;border-radius:12px;padding:12px;font-size:15px}
   .mitem{padding:12px 16px;border-bottom:1px solid #232c42;font-size:15px}
   .hint{font-size:12px;opacity:.55}
   .dmi{padding:12px;border:1px solid #2a3550;border-radius:12px;background:#161d2e}
+  #menu{position:fixed;top:56px;right:8px;z-index:40;background:#1d2740;border:1px solid #2a3550;border-radius:12px;min-width:230px;display:none;overflow:hidden}
+  #menu.open{display:block}
 </style>
 </head>
 <body>
@@ -44,10 +47,10 @@
   <button class="btn" id="send">➤</button>
 </div>
 
-<div id="menu" class="panel" style="inset:auto;top:56px;right:8px;bottom:auto;background:#1d2740;border:1px solid #2a3550;border-radius:12px;min-width:220px">
-  <div class="mitem" id="miGeneral">💬 Общий чат</div>
-  <div class="mitem" id="miDM">📨 Переписка</div>
+<div id="menu">
   <div class="mitem" id="miAcc">👤 Аккаунт</div>
+  <div class="mitem" id="miDM">📨 Переписка</div>
+  <div class="mitem" id="miGeneral">💬 Общий чат</div>
   <div class="mitem" id="miName">✏️ Сменить имя</div>
 </div>
 
@@ -55,7 +58,7 @@
   <div class="phead"><button class="ghost" id="dmBack">←</button>Переписка</div>
   <div class="pbody">
     <div class="hint">Личные чаты по тегу. Нужен аккаунт.</div>
-    <div id="noAcc" class="hint" hidden>Сначала создай аккаунт в меню «Аккаунт».</div>
+    <div id="noAcc" class="hint" hidden>Сначала создай аккаунт: меню ☰ → Аккаунт.</div>
     <input id="peerTag" class="field" placeholder="@тег собеседника">
     <button class="primary" id="openDM">Открыть переписку</button>
     <div style="font-weight:700;margin-top:6px">Твои диалоги</div>
@@ -88,7 +91,7 @@ if(!localStorage.mydusUid) localStorage.mydusUid = Math.random().toString(36).sl
 const uid = localStorage.mydusUid;
 
 function acc(){ try{ return JSON.parse(localStorage.mydusAcc||'null'); }catch(e){ return null; } }
-function myName(){ const a = acc(); return a ? a.tag : (localStorage.mydusName || ''); }
+function myName(){ const a = acc(); return a ? (a.nick || a.tag) : (localStorage.mydusName || ''); }
 if(!acc() && !localStorage.mydusName){
   let n = ''; while(!n){ n = (prompt('Как тебя зовут?')||'').trim().slice(0,30); } localStorage.mydusName = n;
 }
@@ -125,7 +128,7 @@ function openGeneral(){
 function dmKey(a, b){ return [a, b].sort().join('__'); }
 
 function openDM(key, peer){
-  if(!acc()){ alert('Нужен аккаунт: меню ☰ → Аккаунт'); showPanel('menu'); return; }
+  if(!acc()){ alert('Нужен аккаунт: меню ☰ → Аккаунт'); return; }
   cur = {type:'dm', key, peer};
   ttl.textContent = '@' + peer;
   listen(db.ref('dm/' + key + '/msgs'));
@@ -167,6 +170,7 @@ inp.addEventListener('keydown', e=>{ if(e.key === 'Enter') send(); });
 /* --- панели --- */
 function hidePanels(){
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('open'));
+  document.getElementById('menu').classList.remove('open');
 }
 function togglePanel(id){
   const el = document.getElementById(id);
@@ -176,11 +180,15 @@ function togglePanel(id){
 }
 
 document.getElementById('burger').onclick = ()=>{
-  const acc0 = acc();
-  document.getElementById('miName').hidden = !!acc0;
-  document.getElementById('miAcc').textContent = acc0 ? ('👤 @' + acc0.tag) : '👤 Аккаунт';
+  const a = acc();
+  document.getElementById('miName').hidden = !!a;
+  document.getElementById('miAcc').textContent = a ? ('👤 @' + (a.nick || a.tag)) : '👤 Аккаунт';
   togglePanel('menu');
 };
+document.addEventListener('click', e=>{
+  if(!document.getElementById('menu').contains(e.target) && e.target.id !== 'burger')
+    document.getElementById('menu').classList.remove('open');
+});
 
 document.getElementById('miGeneral').onclick = openGeneral;
 document.getElementById('miName').onclick = ()=>{
@@ -198,12 +206,12 @@ document.getElementById('miDM').onclick = ()=>{
 document.getElementById('dmBack').onclick = hidePanels;
 
 document.getElementById('openDM').onclick = async ()=>{
+  const a = acc(); if(!a) return;
   const tag = (document.getElementById('peerTag').value||'').trim().replace(/^@/,'');
   if(!tag) return;
-  if(!acc()) return;
   const snap = await db.ref('users/' + tag).once('value');
   if(!snap.exists()){ alert('Аккаунт @' + tag + ' не найден'); return; }
-  openDM(dmKey(acc().tag, tag), tag);
+  openDM(dmKey(a.tag, tag), tag);
 };
 
 db.ref('dm').on('child_added', s=>{
@@ -232,13 +240,43 @@ function renderAcc(){
   if(a){
     b.innerHTML =
       '<div style="font-weight:700;font-size:18px">@' + a.tag + '</div>' +
-      '<div class="hint">Твой тег. По нему тебя найдут в переписке.</div>' +
+      '<div class="hint">Твой тег — логин. По нему тебя найдут в переписке.</div>' +
+      '<div class="hint">Ник: <b id="nickNow">' + (a.nick || 'не задан') + '</b></div>' +
+      '<input id="newNick" class="field" placeholder="Новый ник (пусто — оставить)">' +
+      '<button class="primary" id="nickBtn">Сменить ник</button>' +
+      '<button class="primary" id="passBtn">Сменить пароль</button>' +
       '<button class="primary" id="showPass">Показать пароль</button>' +
       '<div class="hint" id="passOut" hidden></div>' +
-      '<button class="primary" id="logout" style="background:#5a2733">Выйти</button>';
+      '<button class="danger" id="logout">Выйти</button>';
+    b.querySelector('#nickBtn').onclick = async ()=>{
+      const n = (b.querySelector('#newNick').value||'').trim().slice(0,30);
+      if(!n){ alert('Впиши новый ник (или оставь поле пустым)'); return; }
+      const a0 = acc();
+      a0.nick = n;
+      localStorage.mydusAcc = JSON.stringify(a0);
+      await db.ref('users/' + a0.tag + '/n').set(n);
+      renderAcc();
+      document.getElementById('burger').click();
+      document.getElementById('burger').click();
+    };
+    b.querySelector('#passBtn').onclick = async ()=>{
+      const old = prompt('Старый пароль:');
+      if(old === null) return;
+      const a0 = acc();
+      const h0 = await sha(a0.tag + ':' + old);
+      const snap = await db.ref('users/' + a0.tag + '/p').once('value');
+      if(snap.val() !== h0){ alert('Старый пароль неверный'); return; }
+      const np = prompt('Новый пароль (минимум 4 символа):');
+      if(np === null) return;
+      if(np.length < 4){ alert('Пароль минимум 4 символа'); return; }
+      await db.ref('users/' + a0.tag + '/p').set(await sha(a0.tag + ':' + np));
+      a0.pass = np;
+      localStorage.mydusAcc = JSON.stringify(a0);
+      alert('Пароль изменён');
+    };
     b.querySelector('#showPass').onclick = ()=>{
       const out = b.querySelector('#passOut');
-      out.hidden = false; out.textContent = 'Пароль: ' + a.pass;
+      out.hidden = false; out.textContent = 'Пароль: ' + acc().pass;
     };
     b.querySelector('#logout').onclick = ()=>{
       localStorage.removeItem('mydusAcc');
@@ -246,11 +284,11 @@ function renderAcc(){
     };
   } else {
     b.innerHTML =
-      '<div class="hint">Аккаунт = тег и пароль. По ним можно войти на любом телефоне.</div>' +
+      '<div class="hint">Выбери себе тег — он станет твоим логином. Пароль нужен для входа на любом телефоне.</div>' +
       '<input id="regTag" class="field" placeholder="Тег (латиница, цифры, _), 3–20">' +
-      '<input id="regPass" class="field" type="password" placeholder="Пароль (минимум 4 символа)">' +
+      '<input id="regPass" class="field" type="password" placeholder="Придумай пароль (минимум 4)">' +
       '<button class="primary" id="regBtn">Создать аккаунт</button>' +
-      '<div class="hint">Уже есть аккаунт?</div>' +
+      '<div class="hint" style="margin-top:8px">Уже есть аккаунт? Войди:</div>' +
       '<input id="logTag" class="field" placeholder="Тег">' +
       '<input id="logPass" class="field" type="password" placeholder="Пароль">' +
       '<button class="primary" id="logBtn">Войти</button>';
@@ -261,8 +299,7 @@ function renderAcc(){
       if(pass.length < 4){ alert('Пароль минимум 4 символа'); return; }
       const snap = await db.ref('users/' + tag).once('value');
       if(snap.exists()){ alert('Тег @' + tag + ' уже занят'); return; }
-      const h = await sha(tag + ':' + pass);
-      await db.ref('users/' + tag).set({p:h});
+      await db.ref('users/' + tag).set({p: await sha(tag + ':' + pass)});
       localStorage.mydusAcc = JSON.stringify({tag, pass});
       renderAcc(); openGeneral();
     };
@@ -271,9 +308,8 @@ function renderAcc(){
       const pass = b.querySelector('#logPass').value;
       const snap = await db.ref('users/' + tag).once('value');
       if(!snap.exists()){ alert('Аккаунт @' + tag + ' не найден'); return; }
-      const h = await sha(tag + ':' + pass);
-      if(snap.val().p !== h){ alert('Неверный пароль'); return; }
-      localStorage.mydusAcc = JSON.stringify({tag, pass});
+      if(snap.val().p !== await sha(tag + ':' + pass)){ alert('Неверный пароль'); return; }
+      localStorage.mydusAcc = JSON.stringify({tag, pass, nick: snap.val().n || ''});
       renderAcc(); openGeneral();
     };
   }
